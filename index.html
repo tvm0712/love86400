@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>愛的86400 - 互動式小說原型</title>
+    
+    <style>
+        /* 載入畫面 */
+        #loading-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0f172a; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 9999;
+            font-family: sans-serif; color: #94a3b8; text-align: center;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 4px solid #334155;
+            border-top: 4px solid #a855f7; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@400;700&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .serif { font-family: 'Noto Serif TC', serif; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        
+        /* 動畫特效 */
+        @keyframes blob {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+        }
+        .animate-blob { animation: blob 7s infinite; }
+        
+        @keyframes progress {
+            0% { width: 100%; }
+            100% { width: 0%; }
+        }
+        .animate-progress {
+            animation: progress 3s linear forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+        
+        .glitch-text {
+            position: relative;
+        }
+        .glitch-text::before, .glitch-text::after {
+            content: attr(data-text);
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        }
+        .glitch-text::before {
+            left: 2px; text-shadow: -1px 0 #ff00c1; clip: rect(44px, 450px, 56px, 0);
+            animation: glitch-anim 5s infinite linear alternate-reverse;
+        }
+        .glitch-text::after {
+            left: -2px; text-shadow: -1px 0 #00fff9; clip: rect(44px, 450px, 56px, 0);
+            animation: glitch-anim2 5s infinite linear alternate-reverse;
+        }
+        @keyframes glitch-anim {
+            0% { clip: rect(14px, 9999px, 127px, 0); }
+            20% { clip: rect(8px, 9999px, -2px, 0); }
+            40% { clip: rect(138px, 9999px, 92px, 0); }
+            60% { clip: rect(2px, 9999px, 12px, 0); }
+            80% { clip: rect(69px, 9999px, 33px, 0); }
+            100% { clip: rect(22px, 9999px, 102px, 0); }
+        }
+    </style>
+
+    <script>
+        window.onerror = function(msg) {
+            var el = document.getElementById('loading-screen');
+            if(el) el.innerHTML = `<div style="color:#ef4444">⚠️ Error: ${msg}<br>請使用 Chrome 開啟</div>`;
+        };
+    </script>
+    
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root">
+        <div id="loading-screen">
+            <div class="spinner"></div>
+            <h3 class="text-white">系統載入中...</h3>
+        </div>
+    </div>
+
+    <script type="text/babel">
+        // ----------------------------------------------------------------------
+        // 0. AUDIO SYSTEM (Global Singleton)
+        // ----------------------------------------------------------------------
+        const BGM_URL = "https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg"; 
+        
+        // 全域變數，確保切換頁面時音樂不中斷
+        const audioContext = {
+            ctx: null,
+            bgm: null,
+            isInitialized: false
+        };
+
+        const initAudio = () => {
+            if (audioContext.isInitialized) return;
+            
+            try {
+                audioContext.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                audioContext.bgm = new Audio(BGM_URL);
+                audioContext.bgm.loop = true;
+                audioContext.bgm.volume = 0.4;
+                audioContext.isInitialized = true;
+            } catch (e) {
+                console.error("Audio init failed", e);
+            }
+        };
+
+        const playClickSound = (isMuted) => {
+            if (isMuted || !audioContext.ctx) return;
+            
+            // 嘗試喚醒 AudioContext (瀏覽器政策)
+            if (audioContext.ctx.state === 'suspended') {
+                audioContext.ctx.resume().catch(e => console.log("Resume failed", e));
+            }
+
+            try {
+                const oscillator = audioContext.ctx.createOscillator();
+                const gainNode = audioContext.ctx.createGain();
+                
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(600, audioContext.ctx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(100, audioContext.ctx.currentTime + 0.15);
+                
+                gainNode.gain.setValueAtTime(0.1, audioContext.ctx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.ctx.currentTime + 0.1);
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.ctx.destination);
+                
+                oscillator.start();
+                oscillator.stop(audioContext.ctx.currentTime + 0.15);
+            } catch (e) {
+                // Ignore audio errors
+            }
+        };
+
+        // ----------------------------------------------------------------------
+        // 1. ICONS (SVG 定義)
+        // ----------------------------------------------------------------------
+        const Icon = ({ p, className }) => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{p}</svg>;
+        const Icons = {
+            Play: <polygon points="5 3 19 12 5 21 5 3"/>,
+            Pause: <g><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></g>,
+            Clock: <g><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></g>,
+            User: <g><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>,
+            Heart: <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>,
+            Dice: <g><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M16 8h.01"/><path d="M8 8h.01"/><path d="M8 16h.01"/><path d="M16 16h.01"/><path d="M12 12h.01"/></g>,
+            Zap: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>,
+            Skull: <g><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v2h8v-2"/><path d="m12.5 17-.5-1-.5 1h1z"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/></g>,
+            Money: <g><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></g>,
+            Ghost: <path d="M9 10h.01M15 10h.01M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>,
+            Repeat: <g><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></g>,
+            Eye: <g><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></g>,
+            Ear: <g><path d="M6 8.5a6.5 6.5 0 1 1 13 0c0 6-6 6-6 10a3.5 3.5 0 1 1-7 0"></path><path d="M15 8.5a2.5 2.5 0 0 0-5 0v1a2 2 0 1 0 4 0v-1"></path></g>,
+            MapIcon: <g><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="22"></line></g>,
+            MessageCircle: <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"></path>,
+            SkipBack: <g><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></g>,
+            SkipForward: <g><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></g>,
+            Volume2: <g><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></g>,
+            VolumeX: <g><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></g>
+        };
+        const I = ({ n, c }) => <Icon p={Icons[n]} className={c} />;
+
+        // --- 2. DATA (角色與劇本) ---
+        const characters = [
+            { id: 'leo', name: 'Leo', role: '高冷花心男', color: 'bg-indigo-500', imgFile: '001.jpg', keyword: 'man,suit', lock: 101, mapPos: { top: '55%', left: '45%' } },
+            { id: 'claire', name: 'Claire', role: '御姐女友', color: 'bg-purple-600', imgFile: '002.jpg', keyword: 'woman,fashion', lock: 205, mapPos: { top: '75%', left: '30%' } },
+            { id: 'mina', name: 'Mina', role: '蘿莉女友', color: 'bg-pink-400', imgFile: '003.jpg', keyword: 'girl,cute', lock: 308, mapPos: { top: '40%', left: '45%' } },
+            { id: 'vicky', name: 'Vicky', role: '性感服務生', color: 'bg-red-500', imgFile: '004.jpg', keyword: 'woman,waitress', lock: 412, mapPos: { top: '60%', left: '65%' } },
+            { id: 'gordon', name: 'Gordon', role: '暴躁主廚', color: 'bg-stone-600', imgFile: '005.jpg', keyword: 'chef,man', lock: 523, mapPos: { top: '20%', left: '80%' } },
+            { id: 'penguin', name: 'Pengo', role: '高智慧企鵝玩偶', color: 'bg-sky-400', imgFile: '006.jpg', keyword: 'penguin,plush', lock: 666, mapPos: { top: '30%', left: '20%' } }
+        ];
+
+        // ... (保留先前的劇本資料: storyLines, timelineExp1) ...
+        const timelineExp1 = [
+            {
+              time: 0,
+              leo: { type: 'thought', text: "這間餐廳燈光夠暗，應該很安全。Mina 說想吃牛排很久了。", visual: "切著盤中的牛排，眼神習慣性地掃描餐廳門口。" },
+              mina: { type: 'dialogue', text: "Leo 哥哥，這家的牛排好好吃喔～我們要不要拍照？", visual: "拿著手機，透過美顏濾鏡看著 Leo 的臉。" },
+              claire: { type: 'thought', text: "剛下飛機真累。這家餐廳評價不錯，希望能安靜吃頓飯。", visual: "推開餐廳大門，服務生正在帶位，視線掃過昏暗的大廳。" },
+              vicky: { type: 'thought', text: "3號桌那個帥哥帶的妹子跟上週不一樣欸。有意思。", visual: "拿著紅酒瓶，站在角落觀察場內動向。" },
+              gordon: { type: 'action', text: "（對著內場大吼）羊排佐醬呢！你是要讓客人等到聖誕節嗎！", visual: "盯著出餐口的單據，煙霧繚繞的廚房視角。" },
+              penguin: { type: 'thought', text: "人類的求偶儀式真複雜。還是我的魚罐頭單純。", visual: "坐在高腳椅上，假裝自己是個裝飾品。" }
+            },
+            {
+              time: 60,
+              leo: { type: 'thought', text: "主廚我愛你！這是我這輩子見過最美的牛排！", visual: "趁著主廚擋住視線的混亂瞬間，看著唯一的逃生出口（後門）。" },
+              mina: { type: 'thought', text: "這老女人是誰？氣場好恐怖...", visual: "被 Claire 的氣勢嚇到，往後縮了一下。" },
+              claire: { type: 'thought', text: "想跑？門都沒有。", visual: "無視主廚的鐵板，伸手直接抓住了 Leo 的衣領。" },
+              vicky: { type: 'thought', text: "要打起來了嗎？我要不要報警？還是先錄影？", visual: "手已經摸到了口袋裡的手機。" },
+              gordon: { type: 'thought', text: "為什麼沒有人在乎我的威靈頓牛排！這群野蠻人！", visual: "看著精美的擺盤即將被毀，心中在淌血。" },
+              penguin: { type: 'thought', text: "戰鬥力分析：紫色大衣女性戰鬥力 9000。藍色西裝男性戰鬥力 5。", visual: "掃描全場，眼中閃過數據流。" }
+            },
+            {
+                time: 120,
+                leo: { type: 'action', text: "（閉上眼睛準備迎接衝擊）", visual: "看到 Mina 手中的水杯潑過來，本能地縮起脖子。" },
+                mina: { type: 'action', text: "（用力潑出水杯裡的水）去死吧！", visual: "將整杯冰水狠狠潑向 Leo... 的方向，但 Leo 躲開了。" },
+                claire: { type: 'action', text: "（優雅地拿起餐巾擋住）", visual: "反應極快地擋住了飛濺的水珠，但紅酒還是被波及到了。" },
+                vicky: { type: 'dialogue', text: "哇喔！Critical Hit！水屬性攻擊！", visual: "差點為了拍特寫而滑倒，心裡暗爽。" },
+                gordon: { type: 'dialogue', text: "不！！！！我的特製紅酒醬汁！！！！", visual: "看著被水潑到的牛排盤，發出了靈魂深處的慘叫。" },
+                penguin: { type: 'action', text: "（微調姿勢）", visual: "為了避免被水潑到，稍微往左邊挪動了 2 公分。沒人發現。" }
+            },
+            {
+                time: 180,
+                leo: { type: 'visual', text: "（眼前一片血紅）", visual: "紅酒順著頭髮淋下，流進眼睛和嘴巴，視線變得模糊且帶著葡萄味。" },
+                mina: { type: 'thought', text: "活該！...但為什麼心還是好痛...", visual: "透過指縫看到 Leo 狼狽的樣子，哭笑不得。" },
+                claire: { type: 'dialogue', text: "這才是你該有的樣子。垃圾就該待在垃圾桶裡。", visual: "將空酒瓶重重放在桌上，發出「咚」的一聲，像法官落槌。" },
+                vicky: { type: 'dialogue', text: "完勝！正宮完勝！今天的直播斗內要爆了！", visual: "對著鏡頭比了個勝利手勢，背景是滿頭紅酒的 Leo。" },
+                gordon: { type: 'dialogue', text: "全都給我滾出去！！！永遠別再來了！！！", visual: "揮舞著巨大的胡椒研磨棒，像驅魔一樣指著門口。" },
+                penguin: { type: 'thought', text: "紅酒年份 2015，浪費了。人類真是浪費資源的生物。", visual: "看著地上的紅酒漬，感到惋惜。" }
+            },
+            {
+                time: 240,
+                leo: { type: 'visual', text: "嗶—嗶—（交易拒絕：餘額不足）", visual: "刷卡機發出無情的拒絕聲，螢幕上紅色的「DECLINED」字樣格外刺眼。" },
+                mina: { type: 'dialogue', text: "噗... 哈哈哈哈！太丟臉了吧！", visual: "終於忍不住破涕為笑，指著 Leo 笑得彎下腰。" },
+                claire: { type: 'dialogue', text: "真是意料之中。連這點錢都沒有，還想學人劈腿？", visual: "冷笑著搖搖頭，轉身拿起包包準備離開。" },
+                vicky: { type: 'dialogue', text: "交易失敗！渣男信用破產！今日最佳笑話！", visual: "對著鏡頭大笑，直播間的留言刷屏刷到看不清。" },
+                gordon: { type: 'dialogue', text: "沒錢？那就留下來洗碗！洗到這筆帳還清為止！跟我進廚房！", visual: "一把揪住 Leo 的領帶，像拖死狗一樣把他往充滿油煙的廚房拖去。" },
+                penguin: { type: 'thought', text: "檢測到金融危機。計算 Leo 洗碗還債所需時間：3842 小時。", visual: "眼中閃過複雜的計算公式。" }
+            },
+            {
+                time: 300,
+                leo: { type: 'visual', text: "（看著永無止盡的髒盤子，流下了悔恨的淚水）", visual: "視線模糊，分不清臉上是洗碗水還是淚水，背景是 Gordon 的怒吼聲。" },
+                mina: { type: 'action', text: "（按下封鎖鍵）再見，前男友。", visual: "手機螢幕上顯示「已封鎖 Leo」，手指輕快地按下了確認。" },
+                claire: { type: 'dialogue', text: "Vicky，幫我們拍張照吧。慶祝重生。", visual: "舉起酒杯，拉著 Mina 靠近自己，對著 Vicky 的鏡頭微笑。" },
+                vicky: { type: 'dialogue', text: "來囉！三、二、一！西瓜甜不甜～", visual: "按下快門，將這個荒謬又完美的夜晚定格。" },
+                gordon: { type: 'thought', text: "哼，至少這兩個女人懂得品味甜點。至於那個洗碗工... 明天叫他刷馬桶。", visual: "看著外場和諧的氣氛，怒氣稍微消了一些，轉身繼續監督 Leo。" },
+                penguin: { type: 'action', text: "（被遺忘在角落）", visual: "餐廳打烊了，燈光熄滅。玩偶企鵝的眼睛在黑暗中閃爍了一下紅光。上傳數據完畢。" }
+            }
+        ];
+
+        const storyLines = {
+            leo: [
+                { situation: "死亡開局", text: "Mina 指著你尖叫，Claire 冷笑。你背脊發涼，這是一場必輸的局。", options: [{ type: 'normal', label: '誠實招認', desc: '「對不起，我劈腿了。」', stats: { chaos: -10, love: 10, money: 0, violence: 0 } }, { type: 'rebel', label: '先發制人', desc: '「妳們不信任我！」', stats: { chaos: 30, love: -50, money: 0, violence: 10 } }, { type: 'fantasy', label: '假裝失憶', desc: '「我是誰？」', stats: { chaos: 60, love: 0, money: 0, violence: 0 } }] },
+                { situation: "謊言升級", responses: { normal: "妳們愣住了，", rebel: "妳們更生氣了，", fantasy: "沒人理你的失憶，" }, baseText: "Mina 拿出手機要發文，Claire 拿出黑卡要結帳走人。", options: [{ type: 'normal', label: '阻止發文', desc: '「我不想傷害妳們名譽。」', stats: { chaos: -10, love: 10, violence: 0, money: 0 } }, { type: 'rebel', label: '搶黑卡', desc: '「這餐我請！」', stats: { chaos: 40, love: -40, violence: 20, money: 0 } }, { type: 'fantasy', label: '定格', desc: '試圖暫停時間。', stats: { chaos: 70, love: 0, violence: 0, money: 0 } }] },
+                { situation: "尷尬前菜", responses: { normal: "氣氛稍微緩和，", rebel: "黑卡掉進湯裡，", fantasy: "你像個雕像不動，" }, baseText: "前菜上桌了。Gordon 在廚房咆哮。", options: [{ type: 'normal', label: '自我反省', desc: '低頭懺悔。', stats: { chaos: -20, love: 20, money: 0, violence: 0 } }, { type: 'rebel', label: '嫌菜難吃', desc: '轉移仇恨值。', stats: { chaos: 30, violence: 10, money: 0, love: 0 } }, { type: 'fantasy', label: '跟食物對話', desc: '「蘆筍啊，你懂我嗎？」', stats: { chaos: 60, love: 0, money: 0, violence: 0 } }] },
+                { situation: "主廚巡場", responses: { normal: "你真誠的樣子讓人心軟，", rebel: "主廚聽到了抱怨，", fantasy: "蘆筍沒有回應，" }, baseText: "Gordon 拿著平底鍋衝出來：「誰在浪費我的食物！」", options: [{ type: 'normal', label: '挺身承擔', desc: '「是我胃口不好。」', stats: { chaos: -10, violence: 0, money: 0, love: 10 } }, { type: 'rebel', label: '指著 Mina', desc: '「是她不吃的！」', stats: { chaos: 30, love: -50, violence: 10, money: 0 } }, { type: 'fantasy', label: '隱身術', desc: '催眠自己看不到主廚。', stats: { chaos: 80, love: 0, violence: 0, money: 0 } }] },
+                { situation: "網紅亂入", responses: { normal: "主廚被你的態度軟化，", rebel: "Mina 瞪死你，", fantasy: "主廚還是在瞪你，" }, baseText: "Vicky 拿著手機衝過來：「家人們！抓到野生渣男！」", options: [{ type: 'normal', label: '面對鏡頭', desc: '「我做錯了，請罵我。」', stats: { chaos: -10, love: 10, violence: 0, money: 0 } }, { type: 'rebel', label: '比中指', desc: '挑釁觀眾。', stats: { chaos: 50, love: -20, violence: 20, money: 0 } }, { type: 'fantasy', label: '跳起舞', desc: '試圖把直播變成才藝秀。', stats: { chaos: 90, love: 0, violence: 0, money: 10 } }] },
+                { situation: "物理攻擊", responses: { normal: "觀眾說你是真男人，", rebel: "留言區爆炸了，", fantasy: "觀眾以為是特效，" }, baseText: "Mina 終於忍無可忍，拿起了紅酒瓶。", options: [{ type: 'normal', label: '不閃避', desc: '這是贖罪的洗禮。', stats: { chaos: 0, love: 30, violence: 20, money: 0 } }, { type: 'rebel', label: '拿盤子擋', desc: '防禦 +10。', stats: { chaos: 40, violence: 40, money: -20, love: 0 } }, { type: 'fantasy', label: 'AT力場', desc: '展開心之壁。', stats: { chaos: 80, violence: 10, money: 0, love: 0 } }] },
+                { situation: "帳單時刻", responses: { normal: "紅酒淋了一身，你沒躲，", rebel: "盤子碎了，", fantasy: "還是濕透了，" }, baseText: "Gordon 遞上天價帳單。你摸了摸口袋，卡沒了。", options: [{ type: 'normal', label: '坦白沒錢', desc: '「我現在身無分文，但我會負責。」', stats: { chaos: -20, love: 20, money: 0, violence: 0 } }, { type: 'rebel', label: '賴帳', desc: '「我不付！」', stats: { chaos: 30, violence: 30, money: 0, love: -100 } }, { type: 'fantasy', label: '變出鴿子', desc: '魔術師里歐。', stats: { chaos: 90, money: 0, violence: 0, love: 0 } }] },
+                { situation: "信用危機", responses: { normal: "你低下了頭，", rebel: "Gordon 亮出菜刀，", fantasy: "鴿子飛走了，" }, baseText: { normal: "Gordon 皺起眉頭：「沒錢？那你點什麼威靈頓牛排？」氣氛凝重，但 Claire 似乎在看手機。", default: "刷卡機嗶嗶兩聲：DECLINED。全場死寂。" }, options: [{ type: 'normal', label: '再次道歉', desc: '「請給我一點時間...」', stats: { chaos: -20, love: 30, violence: 0, money: 50 } }, { type: 'rebel', label: '逃跑', desc: '拔腿就跑。', stats: { chaos: 60, violence: 50, money: 0, love: 0 } }, { type: 'fantasy', label: '穿牆術', desc: '試圖穿過牆壁離開。', stats: { chaos: 70, money: 0, violence: 0, love: 0 } }] },
+                { situation: "最終審判", responses: { normal: "Claire 的手機亮了一下，", rebel: "被服務生攔住，", fantasy: "你撞到了牆壁，" }, baseText: { normal: "Gordon 突然收到了入帳通知，表情變了。「有人幫你付了。滾吧。」Claire 已經走到了門口。", default: "Gordon 抓住了你的衣領，Claire 冷笑，Mina 拿著手機錄影。" }, options: [{ type: 'normal', label: '追上去', desc: '「Claire！等等！」', stats: { chaos: -20, money: 0, violence: 0, love: 50 } }, { type: 'rebel', label: '咬他手', desc: '最後的掙扎。', stats: { chaos: 50, violence: 80, money: 0, love: 0 } }, { type: 'fantasy', label: '靈魂出竅', desc: '放棄思考。', stats: { chaos: 100, money: 0, violence: 0, love: 0 } }] }
+            ],
+            claire: [
+                { situation: "看戲模式", text: "眼前的小女孩正對著妳的男友尖叫。Leo 看起來像隻受驚的過街老鼠。真有趣。", options: [{ type: 'normal', label: '冷眼旁觀', desc: '優雅地喝紅酒。', stats: { chaos: -10, love: -10, money: 0, violence: 0 } }, { type: 'rebel', label: '嘲諷', desc: '「眼光真差。」', stats: { chaos: 20, love: -30, money: 0, violence: 0 } }, { type: 'fantasy', label: '召喚律師', desc: '「把法務叫來。」', stats: { chaos: 40, love: -50, money: -20, violence: 0 } }] },
+                { situation: "主權宣示", responses: { normal: "紅酒不錯，", rebel: "Mina 氣紅了臉，", fantasy: "律師正在路上，" }, baseText: "Mina 轉過頭來瞪妳。Leo 試圖解釋。", options: [{ type: 'normal', label: '無視她', desc: '繼續切牛排。', stats: { chaos: -10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '拿出合約', desc: '「交往守則第5條。」', stats: { chaos: 30, love: -40, money: 0, violence: 0 } }, { type: 'fantasy', label: '眼神光波', desc: '用氣勢壓倒她。', stats: { chaos: 50, love: 0, money: 0, violence: 0 } }] },
+                { situation: "餐桌禮儀", responses: { normal: "牛排有點老，", rebel: "Leo 閉嘴了，", fantasy: "Mina 被嚇到了，" }, baseText: "Gordon 出現了，對著 Leo 的吃相皺眉。", options: [{ type: 'normal', label: '點頭致意', desc: '展現教養。', stats: { chaos: -10, love: 10, money: 0, violence: 0 } }, { type: 'rebel', label: '批評菜色', desc: '「這也能叫牛排？」', stats: { chaos: 40, violence: 10, money: 0, love: -20 } }, { type: 'fantasy', label: '買下餐廳', desc: '「多少錢？我買。」', stats: { chaos: 20, money: -100, violence: 0, love: 0 } }] },
+                { situation: "網紅騷擾", responses: { normal: "主廚很高興，", rebel: "主廚臉綠了，", fantasy: "主廚愣住了，" }, baseText: "Vicky 的鏡頭快貼到妳臉上了。", options: [{ type: 'normal', label: '遮臉', desc: '低調。', stats: { chaos: 0, love: 0, violence: 0, money: 0 } }, { type: 'rebel', label: '搶手機', desc: '「侵犯肖像權。」', stats: { chaos: 30, violence: 30, money: 0, love: 0 } }, { type: 'fantasy', label: '反向直播', desc: '拿出自己的手機互拍。', stats: { chaos: 60, love: 0, violence: 0, money: 0 } }] },
+                { situation: "潑水瞬間", responses: { normal: "Vicky 縮手了，", rebel: "Vicky 尖叫，", fantasy: "兩支手機對峙，" }, baseText: "Mina 拿起了水杯，目標是 Leo。", options: [{ type: 'normal', label: '遞紙巾', desc: '預判動作。', stats: { chaos: -10, love: 20, violence: 0, money: 0 } }, { type: 'rebel', label: '加碼紅酒', desc: '幫她補一刀。', stats: { chaos: 50, violence: 40, money: -20, love: 0 } }, { type: 'fantasy', label: '念力', desc: '試圖控制水流。', stats: { chaos: 80, violence: 0, money: 0, love: 0 } }] },
+                { situation: "殘局處理", responses: { normal: "優雅地擦手，", rebel: "Leo 變落湯雞，", fantasy: "水灑得到處都是，" }, baseText: "Leo 全身濕透，向妳投來求救的眼神。", options: [{ type: 'normal', label: '冷笑', desc: '「活該。」', stats: { chaos: 0, love: -50, violence: 0, money: 0 } }, { type: 'rebel', label: '拍照留念', desc: '發到 IG 限動。', stats: { chaos: 30, love: -80, violence: 0, money: 0 } }, { type: 'fantasy', label: '通靈', desc: '「我看不到你。」', stats: { chaos: 60, love: 0, violence: 0, money: 0 } }] },
+                { situation: "金錢遊戲", responses: { normal: "Leo 絕望了，", rebel: "限動破萬瀏覽，", fantasy: "Leo 以為自己死了，" }, baseText: "帳單來了，Leo 的卡刷不過。", options: [{ type: 'normal', label: '幫付', desc: '當作遣散費。', stats: { chaos: -30, love: 0, money: -50, violence: 0 } }, { type: 'rebel', label: '丟黑卡', desc: '「不用找了。」', stats: { chaos: 50, violence: 30, money: -100, love: 0 } }, { type: 'fantasy', label: '鈔票雨', desc: '彈指之間，天降美金。', stats: { chaos: 90, money: -100, violence: 0, love: 0 } }] },
+                { situation: "最後通牒", responses: { normal: "錢能解決都是小事，", rebel: "Gordon 撿起卡片，", fantasy: "Gordon 在錢海游泳，", }, baseText: "Gordon 擋住了門口。", options: [{ type: 'normal', label: '帶走 Mina', desc: '「我們走。」', stats: { chaos: 0, love: 50, money: 0, violence: 0 } }, { type: 'rebel', label: '推 Leo 出去', desc: '「他是抵押品。」', stats: { chaos: 30, love: 0, money: 0, violence: 20 } }, { type: 'fantasy', label: '現實改寫', desc: '把餐廳變成皇宮。', stats: { chaos: 80, love: 0, money: 0, violence: 0 } }] },
+                { situation: "終局", responses: { normal: "Mina 跟我走，", rebel: "Leo 被留下了，", fantasy: "這裡是皇宮了，", }, baseText: "Leo 被拖進廚房，妳站在門口。", options: [{ type: 'normal', label: '離開', desc: '不回頭。', stats: { chaos: -20, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '回頭比讚', desc: '給 Vicky 一個鏡頭。', stats: { chaos: 20, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '消除記憶', desc: '拿出記憶消除筆。', stats: { chaos: 100, love: 0, money: 0, violence: 0 } }] }
+            ],
+            // ... (其他角色的完整 9 回合劇本，已包含在之前的更新中，這裡完整保留) ...
+            mina: [
+                { situation: "崩潰邊緣", text: "那個老女人是誰？Leo 為什麼不敢看我？你的心跳加速。", options: [{ type: 'normal', label: '質問 Leo', desc: '「說清楚！」', stats: { chaos: 10, love: -20, money: 0, violence: 0 } }, { type: 'rebel', label: '拍桌', desc: '碰！', stats: { chaos: 30, love: -40, money: 0, violence: 10 } }, { type: 'fantasy', label: '變身', desc: '「月光仙子！」', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "謊言連篇", responses: { normal: "他眼神閃爍，", rebel: "手好痛，", fantasy: "你覺得自己變漂亮了，", }, baseText: "Leo 說她是表妹。這藉口爛透了。", options: [{ type: 'normal', label: '哭泣', desc: '眼淚攻勢。', stats: { chaos: -10, love: -10, money: 0, violence: 0 } }, { type: 'rebel', label: '大笑', desc: '笑得心裡發寒。', stats: { chaos: 20, love: -30, money: 0, violence: 0 } }, { type: 'fantasy', label: '讀心術', desc: '試圖讀取他的思想。', stats: { chaos: 40, love: 0, money: 0, violence: 0 } }] },
+                { situation: "食物上桌", responses: { normal: "妝花了，", rebel: "大家都在看妳，", fantasy: "Leo 腦袋空空，", }, baseText: "前菜來了，妳一點胃口都沒有。", options: [{ type: 'normal', label: '推開盤子', desc: '不想吃。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '丟叉子', desc: '匡噹！', stats: { chaos: 30, violence: 20, money: 0, love: 0 } }, { type: 'fantasy', label: '跟盤子說話', desc: '「你也覺得他渣嗎？」', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "主廚憤怒", responses: { normal: "服務生過來了，", rebel: "差點打到人，", fantasy: "盤子不說話，", }, baseText: "Gordon 對著妳吼：「不吃就滾！」", options: [{ type: 'normal', label: '道歉', desc: '「對不起...」', stats: { chaos: -10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '吼回去', desc: '「我就不吃！」', stats: { chaos: 40, violence: 10, money: 0, love: 0 } }, { type: 'fantasy', label: '假裝聽不懂', desc: '開始講外星語。', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "鏡頭聚焦", responses: { normal: "主廚愣住了，", rebel: "主廚更氣了，", fantasy: "主廚以為妳瘋了，", }, baseText: "Vicky 把手機鏡頭對準妳哭花的臉。", options: [{ type: 'normal', label: '擋臉', desc: '別拍！', stats: { chaos: 10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '搶手機', desc: '摔爛它！', stats: { chaos: 50, violence: 40, money: -20, love: 0 } }, { type: 'fantasy', label: '擺 Pose', desc: '比 YA。', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "臨界點", responses: { normal: "沒擋住，", rebel: "螢幕裂了，", fantasy: "觀眾傻眼，", }, baseText: "Leo 還在跟 Claire 竊竊私語，完全無視妳。", options: [{ type: 'normal', label: '拿起水杯', desc: '手在發抖。', stats: { chaos: 20, love: -50, violence: 10, money: 0 } }, { type: 'rebel', label: '拿起紅酒', desc: '這個比較貴。', stats: { chaos: 40, love: -70, violence: 30, money: -30 } }, { type: 'fantasy', label: '詛咒他', desc: '畫圈圈詛咒。', stats: { chaos: 30, love: 0, violence: 0, money: 0 } }] },
+                { situation: "爆發", responses: { normal: "水灑出來了，", rebel: "紅酒準備好了，", fantasy: "覺得背後有靈，", }, baseText: "「去死吧！」液體飛向 Leo。", options: [{ type: 'normal', label: '潑準一點', desc: '正中紅心。', stats: { chaos: 30, love: -100, violence: 20, money: 0 } }, { type: 'rebel', label: '連 Claire 一起潑', desc: '一箭雙雕。', stats: { chaos: 60, love: -50, violence: 40, money: 0 } }, { type: 'fantasy', label: '水之呼吸', desc: '壹之型！', stats: { chaos: 50, love: 0, violence: 50, money: 0 } }] },
+                { situation: "清醒", responses: { normal: "Leo 濕透了，", rebel: "兩人都濕了，", fantasy: "想像中的劍氣，", }, baseText: "Leo 狼狽不堪，還要妳付錢。", options: [{ type: 'normal', label: 'AA制', desc: '付自己的。', stats: { chaos: -10, love: -80, money: -10, violence: 0 } }, { type: 'rebel', label: '轉身就走', desc: '一毛都不付。', stats: { chaos: 20, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '用愛發電', desc: '「我的愛能抵債嗎？」', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "抉擇", responses: { normal: "走出餐廳，", rebel: "Gordon 擋路，", fantasy: "Gordon 傻眼，", }, baseText: "Claire 看著妳，伸出了手。", options: [{ type: 'normal', label: '握手', desc: '跟姐姐走。', stats: { chaos: 0, love: 50, money: 0, violence: 0 } }, { type: 'rebel', label: '自己走', desc: '男人女人都滾。', stats: { chaos: 20, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '飛走', desc: '我是小飛俠。', stats: { chaos: 100, love: 0, money: 0, violence: 0 } }] }
+            ],
+            gordon: [
+                { situation: "廚房暴君", text: "外場在吵什麼？我的威靈頓牛排要冷掉了！", options: [{ type: 'normal', label: '按鈴', desc: '叮！', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '吼叫', desc: '「閉嘴！」', stats: { chaos: 20, love: 0, money: 0, violence: 10 } }, { type: 'fantasy', label: '磨刀', desc: '發出恐怖聲音。', stats: { chaos: 40, love: 0, money: 0, violence: 20 } }] },
+                { situation: "親自出馬", responses: { normal: "沒人理你，", rebel: "全場安靜，", fantasy: "客人嚇壞了，", }, baseText: "那桌客人還在吵。忍無可忍。", options: [{ type: 'normal', label: '走出去', desc: '氣勢洶洶。', stats: { chaos: 10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '拿平底鍋', desc: '武器上手。', stats: { chaos: 30, love: 0, money: 0, violence: 30 } }, { type: 'fantasy', label: '瞬間移動', desc: '閃現到桌邊。', stats: { chaos: 80, love: 0, money: 0, violence: 0 } }] },
+                { situation: "捍衛食物", responses: { normal: "站在桌邊，", rebel: "舉起鍋子，", fantasy: "突然出現，", }, baseText: "他們竟然不吃前菜？這是在侮辱我的廚藝！", options: [{ type: 'normal', label: '質問', desc: '「不合胃口？」', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '強迫餵食', desc: '塞進去！', stats: { chaos: 50, love: 0, money: 0, violence: 50 } }, { type: 'fantasy', label: '食物復活', desc: '命令蘆筍跳舞。', stats: { chaos: 90, love: 0, money: 0, violence: 0 } }] },
+                { situation: "網紅亂入", responses: { normal: "Leo 臉色蒼白，", rebel: "Leo 差點噎死，", fantasy: "蘆筍沒動靜，", }, baseText: "那個叫 Vicky 的服務生在直播，擋住出餐動線。", options: [{ type: 'normal', label: '罵員工', desc: '「去工作！」', stats: { chaos: -10, love: 0, money: 0, violence: 10 } }, { type: 'rebel', label: '沒收手機', desc: '搶過來。', stats: { chaos: 40, love: 0, money: 0, violence: 20 } }, { type: 'fantasy', label: '加入直播', desc: '「訂閱我的頻道。」', stats: { chaos: 70, love: 0, money: 20, violence: 0 } }] },
+                { situation: "混亂升級", responses: { normal: "Vicky 跑了，", rebel: "手機飛了，", fantasy: "訂閱數上升，", }, baseText: "Mina 拿著水杯要潑水，那會弄髒我的地板！", options: [{ type: 'normal', label: '制止', desc: '「住手！」', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '拿鍋擋', desc: '守護地板。', stats: { chaos: 30, love: 0, money: 0, violence: 10 } }, { type: 'fantasy', label: '控制水流', desc: '我是水行俠。', stats: { chaos: 80, love: 0, money: 0, violence: 0 } }] },
+                { situation: "災難發生", responses: { normal: "來不及，", rebel: "擋住了水，", fantasy: "地板濕了，", }, baseText: "水潑到了隔壁桌的限量和牛。心碎。", options: [{ type: 'normal', label: '尖叫', desc: '「我的肉！」', stats: { chaos: 20, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '加價', desc: '「賠錢！」', stats: { chaos: 0, love: 0, money: 50, violence: 0 } }, { type: 'fantasy', label: '時間倒流', desc: '試圖拯救和牛。', stats: { chaos: 90, love: 0, money: 0, violence: 0 } }] },
+                { situation: "清算時刻", responses: { normal: "全場側目，", rebel: "計算機按不停，", fantasy: "和牛沒救了，", }, baseText: "這群奧客想賴帳？", options: [{ type: 'normal', label: '遞帳單', desc: '面無表情。', stats: { chaos: -10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '鎖門', desc: '「誰都別想走！」', stats: { chaos: 40, love: 0, money: 0, violence: 20 } }, { type: 'fantasy', label: '召喚保鑣', desc: '黑衣人進場。', stats: { chaos: 60, love: 0, money: -20, violence: 30 } }] },
+                { situation: "餘額不足", responses: { normal: "他們看著帳單，", rebel: "門鎖上了，", fantasy: "保鑣來了，", }, baseText: "刷卡失敗。那個男的沒錢。", options: [{ type: 'normal', label: '報警', desc: '標準程序。', stats: { chaos: -20, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '抓人', desc: '揪住領子。', stats: { chaos: 30, love: 0, money: 0, violence: 40 } }, { type: 'fantasy', label: '人體煉成', desc: '把他變成食材。', stats: { chaos: 100, love: 0, money: 0, violence: 100 } }] },
+                { situation: "最終處置", responses: { normal: "警察在路上了，", rebel: "Leo 無法呼吸，", fantasy: "太恐怖了，", }, baseText: "後廚缺人手，這個廢物剛好可以用。", options: [{ type: 'normal', label: '洗碗', desc: '勞動抵債。', stats: { chaos: 0, love: 0, money: 10, violence: 0 } }, { type: 'rebel', label: '刷馬桶', desc: '最髒的工作。', stats: { chaos: 20, love: 0, money: 10, violence: 10 } }, { type: 'fantasy', label: '收徒弟', desc: '傳授絕學。', stats: { chaos: 80, love: 20, money: 0, violence: 0 } }] }
+            ],
+            vicky: [
+                { situation: "獵物出現", text: "3號桌氣氛不對！這是流量密碼！", options: [{ type: 'normal', label: '偷看', desc: '觀察。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '直播', desc: '開台！', stats: { chaos: 20, love: 0, money: 10, violence: 0 } }, { type: 'fantasy', label: '肉搜', desc: '「家人們！我要他的個資！」', stats: { chaos: 40, love: 0, money: 0, violence: 0 } }] },
+                { situation: "開場白", responses: { normal: "沒人發現，", rebel: "觀看人數+1，", fantasy: "個資到手，", }, baseText: "大家好，歡迎來到修羅場直播。", options: [{ type: 'normal', label: '小聲說', desc: '氣音。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '大聲說', desc: '求關注。', stats: { chaos: 30, love: 0, money: 20, violence: 0 } }, { type: 'fantasy', label: '變聲特效', desc: '使用柯南變聲器。', stats: { chaos: 20, love: 0, money: 0, violence: 0 } }] },
+                { situation: "觀眾互動", responses: { normal: "沒人理妳，", rebel: "被瞪了，", fantasy: "聲音變怪了，", }, baseText: "有人斗內求特寫。", options: [{ type: 'normal', label: 'Zoom In', desc: '拉近。', stats: { chaos: 10, love: 0, money: 10, violence: 0 } }, { type: 'rebel', label: '貼臉拍', desc: '超近。', stats: { chaos: 40, love: 0, money: 30, violence: 10 } }, { type: 'fantasy', label: '自拍棒', desc: '高角度俯拍。', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "主廚干擾", responses: { normal: "拍到了毛孔，", rebel: "Leo 嚇到了，", fantasy: "俯視角很清楚，", }, baseText: "Gordon 叫妳去工作。", options: [{ type: 'normal', label: '裝忙', desc: '擦桌子。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '拍主廚', desc: '這也是賣點。', stats: { chaos: 30, love: 0, money: 20, violence: 0 } }, { type: 'fantasy', label: '定格濾鏡', desc: '假裝斷線。', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }] },
+                { situation: "衝突升級", responses: { normal: "主廚走了，", rebel: "主廚暴怒，", fantasy: "主廚以為斷線了，", }, baseText: "Mina 要潑水了！關鍵時刻！", options: [{ type: 'normal', label: '找角度', desc: '構圖重要。', stats: { chaos: 10, love: 0, money: 10, violence: 0 } }, { type: 'rebel', label: '喊加油', desc: '唯恐天下不亂。', stats: { chaos: 50, love: 0, money: 30, violence: 0 } }, { type: 'fantasy', label: '慢動作錄影', desc: '捕捉每一滴水珠。', stats: { chaos: 20, love: 0, money: 50, violence: 0 } }] },
+                { situation: "捕捉瞬間", responses: { normal: "拍到了，", rebel: "Mina 潑更大力，", fantasy: "畫面超美，", }, baseText: "水花四濺，Leo 慘叫。", options: [{ type: 'normal', label: '比讚', desc: 'Good job.', stats: { chaos: 10, love: -10, money: 0, violence: 0 } }, { type: 'rebel', label: '遞毛巾', desc: '假好心。', stats: { chaos: 20, love: 0, money: 10, violence: 0 } }, { type: 'fantasy', label: '即時重播', desc: '給觀眾看回放。', stats: { chaos: 10, love: 0, money: 0, violence: 0 } }] },
+                { situation: "高潮迭起", responses: { normal: "Leo 瞪妳，", rebel: "有小費拿，", fantasy: "觀眾刷666，", }, baseText: "Leo 沒錢付帳。聊天室暴動。", options: [{ type: 'normal', label: '解說', desc: '「這就是人生。」', stats: { chaos: 0, love: 0, money: 10, violence: 0 } }, { type: 'rebel', label: '嘲笑', desc: '「沒錢還裝闊！」', stats: { chaos: 40, love: -50, money: 20, violence: 0 } }, { type: 'fantasy', label: '發起募資', desc: '「幫 Leo 籌飯錢！」', stats: { chaos: 10, love: 20, money: 50, violence: 0 } }] },
+                { situation: "收尾", responses: { normal: "觀眾滿意，", rebel: "Leo 崩潰，", fantasy: "錢進來了，", }, baseText: "Leo 被拖走了。", options: [{ type: 'normal', label: '訪問 Claire', desc: '「感想如何？」', stats: { chaos: 10, love: 0, money: 10, violence: 0 } }, { type: 'rebel', label: '自拍', desc: '跟慘況合照。', stats: { chaos: 30, love: 0, money: 20, violence: 0 } }, { type: 'fantasy', label: '虛擬背景', desc: '切換成新聞棚內。', stats: { chaos: 40, love: 0, money: 0, violence: 0 } }] },
+                { situation: "結束", responses: { normal: "Claire 沒理妳，", rebel: "照片很美，", fantasy: "主播上身，", }, baseText: "今天的直播圓滿結束。", options: [{ type: 'normal', label: '關台', desc: '掰掰。', stats: { chaos: -10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '推銷產品', desc: '帶貨時間。', stats: { chaos: 20, love: 0, money: 50, violence: 0 } }, { type: 'fantasy', label: '愛心濾鏡', desc: '全場充滿粉紅泡泡。', stats: { chaos: 30, love: 20, money: 10, violence: 0 } }] }
+            ],
+            // --- New Penguin Storyline ---
+            penguin: [
+                { situation: "觀察模式", text: "你是一隻企鵝玩偶。坐在高處，俯瞰愚蠢的人類。", options: [{ type: 'normal', label: '裝死', desc: '保持玩偶的本分。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '發出怪聲', desc: '「呱？」', stats: { chaos: 20, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '掃描腦波', desc: '分析人類情緒。', stats: { chaos: 50, love: 0, money: 0, violence: 0 } }] },
+                { situation: "謊言偵測", responses: { normal: "沒人注意你，", rebel: "Leo 嚇了一跳，", fantasy: "數據顯示 Leo 在說謊，", }, baseText: "Leo 正在撒謊。他的心跳加速。", options: [{ type: 'normal', label: '無動於衷', desc: '繼續裝死。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '摔倒', desc: '假裝不穩掉下去。', stats: { chaos: 30, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '記錄罪證', desc: '啟動錄音功能。', stats: { chaos: 60, love: 0, money: 0, violence: 0 } }] },
+                { situation: "食物誘惑", responses: { normal: "還好沒摔壞，", rebel: "服務生把你撿起來，", fantasy: "錄音完成，", }, baseText: "牛排上桌了。好香。", options: [{ type: 'normal', label: '聞味道', desc: '只能聞不能吃。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '流口水', desc: '玩偶也會流口水？', stats: { chaos: 40, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '隔空取物', desc: '試圖把牛排吸過來。', stats: { chaos: 80, love: 0, money: 0, violence: 0 } }] },
+                { situation: "主廚暴走", responses: { normal: "好餓，", rebel: "地板濕了，", fantasy: "牛排動了一下，", }, baseText: "Gordon 出現了。戰鬥力 9000。", options: [{ type: 'normal', label: '裝可愛', desc: '試圖萌混過關。', stats: { chaos: 0, love: 20, money: 0, violence: 0 } }, { type: 'rebel', label: '丟餐巾', desc: '挑釁主廚。', stats: { chaos: 50, love: 0, money: 0, violence: 10 } }, { type: 'fantasy', label: '精神控制', desc: '「給我牛排...」', stats: { chaos: 90, love: 0, money: 0, violence: 0 } }] },
+                { situation: "鏡頭威脅", responses: { normal: "主廚沒看你，", rebel: "主廚踩到餐巾，", fantasy: "主廚突然想餵你，", }, baseText: "Vicky 的鏡頭掃過來了。", options: [{ type: 'normal', label: '僵硬', desc: '我是玩偶，我不會動。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '搶鏡', desc: '揮手。', stats: { chaos: 40, love: 0, money: 10, violence: 0 } }, { type: 'fantasy', label: '駭入手機', desc: '把直播畫面換成你的臉。', stats: { chaos: 100, love: 0, money: 0, violence: 0 } }] },
+                { situation: "液體攻擊", responses: { normal: "沒人發現你，", rebel: "觀眾看到鬼了，", fantasy: "全網都是企鵝，", }, baseText: "水潑過來了！會弄濕絨毛！", options: [{ type: 'normal', label: '防水模式', desc: '啟動疏水塗層。', stats: { chaos: 10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '打開傘', desc: '哪來的傘？', stats: { chaos: 50, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '力場護盾', desc: '展開 AT 力場。', stats: { chaos: 80, love: 0, money: 0, violence: 0 } }] },
+                { situation: "金錢危機", responses: { normal: "好險沒濕，", rebel: "傘破了，", fantasy: "水被彈開了，", }, baseText: "Leo 沒錢付帳。人類真麻煩。", options: [{ type: 'normal', label: '計算稅率', desc: '心算。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '貢獻鈕扣', desc: '把身上的鈕扣當錢。', stats: { chaos: 30, love: 20, money: 0, violence: 0 } }, { type: 'fantasy', label: '修改銀行', desc: '駭入銀行系統幫他付。', stats: { chaos: 90, love: 0, money: 100, violence: 0 } }] },
+                { situation: "信用破產", responses: { normal: "算出來了，", rebel: "Gordon 不要鈕扣，", fantasy: "餘額無限，", }, baseText: "刷卡失敗。氣氛凝重。", options: [{ type: 'normal', label: '嘆氣', desc: '「唉。」', stats: { chaos: 10, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '大笑', desc: '「哈！哈！哈！」', stats: { chaos: 50, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '修改額度', desc: '把額度改成無限大。', stats: { chaos: 80, love: 0, money: 100, violence: 0 } }] },
+                { situation: "最終決戰", responses: { normal: "沒人聽到，", rebel: "全場驚恐，", fantasy: "黑卡變神卡，", }, baseText: "一切即將結束。", options: [{ type: 'normal', label: '被帶走', desc: '被當成遺失物。', stats: { chaos: 0, love: 0, money: 0, violence: 0 } }, { type: 'rebel', label: '現出真身', desc: '「我是高智慧生命體！」', stats: { chaos: 100, love: 0, money: 0, violence: 0 } }, { type: 'fantasy', label: '飛向宇宙', desc: '任務完成，回家。', stats: { chaos: 100, love: 0, money: 0, violence: 0 } }] }
+            ]
+        };
+
+        // ----------------------------------------------------------------------
+        // 4. LOGIC FUNCTIONS
+        // ----------------------------------------------------------------------
+        const getEnding = (charId, stats) => {
+            const { chaos, love, money, violence } = stats;
+            
+            // 全域科幻結局 (門檻極高)
+            if (chaos > 90) return { title: '科幻超現實線', name: '母體故障 (Matrix Glitch)', desc: '你發現這個世界只是程式碼，所有人都是 NPC。' };
+            if (chaos > 80 && charId !== 'gordon') return { title: '科幻超現實線', name: '時空迴圈', desc: '不管怎麼選，這個修羅場永遠不會結束...' };
+            
+            switch (charId) {
+                case 'leo':
+                    if (love > 70 && money > 40) return { title: '渣男求生線', name: '軟飯奇蹟', desc: '因為你的誠實，Claire 偷偷幫你買單了。這就是正宮的餘裕嗎？你學會了「吃軟飯也要憑本事」的真理。' };
+                    if (violence > 80) return { title: '地獄廚房線', name: '威靈頓之怒', desc: '你被主廚用平底鍋物理超渡了。' };
+                    if (money < 20) return { title: '金錢戰爭線', name: '洗碗抵債', desc: '你的卡刷不過，只能留在廚房洗一輩子碗。' };
+                    if (money > 80) return { title: '渣男求生線', name: '富豪的逆襲', desc: '雖然很尷尬，但你用錢砸暈了所有人。' };
+                    if (love > 80) return { title: '渣男求生線', name: '完美的謊言', desc: '奇蹟發生了，她們竟然都相信了你的鬼話。' };
+                    return { title: '渣男求生線', name: '尿遁大師', desc: '你藉口上廁所，從窗戶爬出去，留下兩個女人和帳單。' };
+
+                case 'claire':
+                    if (money > 70) return { title: '金錢戰爭線', name: '併購案', desc: '既然服務太差，妳決定直接買下這間餐廳，開除所有人。' };
+                    if (love > 60 && money > 50) return { title: '百合覺醒線', name: '真愛結局', desc: '妳發現眼前的男人根本配不上妳，但對面的女孩挺可愛的。' };
+                    if (chaos > 50) return { title: '法律攻防線', name: '存證信函', desc: '妳現場叫來了律師團，準備讓這個渣男身敗名裂。' };
+                    if (violence > 60) return { title: '暴力美學線', name: '紅酒爆頭', desc: '妳優雅地舉起酒瓶，優雅地砸下去。世界安靜了。' };
+                    return { title: '百合覺醒線', name: '甜蜜下午茶', desc: '妳請女孩吃甜點，看著渣男在廚房洗碗。' };
+
+                case 'mina':
+                    if (love > 60) return { title: '百合覺醒線', name: '女王與公主', desc: '妳認清了渣男，決定跟隨那位霸氣的姐姐。' };
+                    if (violence > 70) return { title: '暴力美學線', name: '防身術', desc: '原來妳是柔道黑帶。Leo 飛出去了，物理意義上的。' };
+                    if (chaos > 80) return { title: '莫名其妙線', name: '求雨儀式', desc: '妳哭得太慘，導致餐廳局部降雨，大家都濕了。' };
+                    return { title: '百合覺醒線', name: '復仇直播', desc: '妳加入 Vicky 的直播，當場揭穿渣男，成為網紅。' };
+
+                case 'vicky':
+                    if (money > 80) return { title: '網紅流量線', name: '帶貨女王', desc: '妳順勢推銷防水睫毛膏，業績爆棚。' };
+                    if (chaos > 70) return { title: '網紅流量線', name: '全民公審', desc: '直播人數破百萬，網友肉搜出 Leo 的祖宗十八代。' };
+                    if (chaos < 20) return { title: '莫名其妙線', name: '服務生上位', desc: '其實這家餐廳是妳開的，妳只是來體驗生活。' };
+                    if (violence > 50) return { title: '暴力美學線', name: '戰地記者', desc: '現場打得太激烈，妳不得不戴上鋼盔繼續直播。' };
+                    return { title: '網紅流量線', name: '直播翻車', desc: '妳為了搶鏡頭滑倒，手機掉進湯裡，什麼都沒錄到。' };
+
+                case 'gordon':
+                    if (violence > 50) return { title: '地獄廚房線', name: '食神大賽', desc: '你強迫所有人停戰，品評你的新菜色。' };
+                    if (money < 30) return { title: '地獄廚房線', name: '餐廳歇業', desc: '太吵了！你崩潰宣佈永久歇業，把所有奧客趕出去。' };
+                    if (chaos > 70) return { title: '地獄廚房線', name: '火燒廚房', desc: '你玩火過頭，餐廳燒起來了，大家在火光中吃最後的晚餐。' };
+                    return { title: '地獄廚房線', name: '百萬名菜', desc: '那個被潑滿紅酒的渣男，被藝評家視為現代藝術，你發財了。' };
+
+                case 'penguin':
+                    if (chaos > 80) return { title: '科幻超現實線', name: '統治地球', desc: '人類太愚蠢了。你決定解除偽裝，接管這個星球。' };
+                    if (love > 50) return { title: '莫名其妙線', name: '成為吉祥物', desc: 'Mina 覺得你太可愛了，把你帶回家洗澡。' };
+                    if (violence > 50) return { title: '暴力美學線', name: '殺手玩偶', desc: '你展現了驚人的戰鬥力，沒人敢惹你。' };
+                    if (money > 50) return { title: '金錢戰爭線', name: '餐廳合夥人', desc: '你駭入銀行幫餐廳還債，成為最大股東。' };
+                    return { title: '莫名其妙線', name: '繼續觀察', desc: '人類這種生物真是太有趣了。你決定繼續偽裝成玩偶。' };
+            }
+            return { title: '莫名其妙線', name: '全劇終', desc: '導演喊卡，大家領便當收工。' };
+        };
+
+        const getStoryNode = (charId, turn, prevType) => {
+            const charStory = storyLines[charId];
+            if (!charStory || !charStory[turn]) return null;
+            
+            const node = charStory[turn];
+            let text = node.text || node.baseText;
+            
+            // Handle object based baseText
+            if (typeof node.baseText === 'object') {
+                text = node.baseText[prevType] || node.baseText.default || Object.values(node.baseText)[0];
+            }
+
+            // 動態文本生成：加入上一回合的結果
+            if (prevType && node.responses && node.responses[prevType]) {
+                text = node.responses[prevType] + text;
+            }
+            
+            return { ...node, text };
+        };
+
+        const getContentAtTime = (time, charId, timeline) => {
+            const events = timeline.filter(t => t.time <= time);
+            if (events.length === 0) return { type: 'wait', text: '...', visual: '...' };
+            const currentEvent = events[events.length - 1];
+            return currentEvent[charId] || { type: 'wait', text: '...', visual: '...' };
+        };
+
+        const getAmbientAudio = (time, activeCharId, timeline) => {
+            const events = timeline.filter(t => t.time <= time);
+            if (events.length === 0) return [];
+            const currentEvent = events[events.length - 1];
+            const audio = [];
+            characters.forEach(char => {
+                if (char.id === activeCharId) return;
+                const charAction = currentEvent[char.id];
+                if (charAction && charAction.type === 'dialogue') {
+                    audio.push({ id: char.id, name: char.name, text: charAction.text, color: char.color });
+                }
+            });
+            return audio;
+        };
+        
+        const getVoiceSettings = (charId) => {
+          switch (charId) {
+            case 'leo': return { pitch: 0.9, rate: 0.9 };
+            case 'claire': return { pitch: 1.0, rate: 1.0 };
+            case 'mina': return { pitch: 1.3, rate: 1.1 };
+            case 'vicky': return { pitch: 1.1, rate: 1.05 };
+            case 'gordon': return { pitch: 0.7, rate: 1.3 };
+            default: return { pitch: 1.0, rate: 1.0 };
+          }
+        };
+
+        // ----------------------------------------------------------------------
+        // 5. COMPONENTS
+        // ----------------------------------------------------------------------
+        const StatBar = ({ stats }) => (
+            <div className="grid grid-cols-4 gap-2 bg-slate-800 p-2 rounded-lg mb-4 text-xs md:text-sm shadow-lg border border-purple-500/30">
+                <div className="flex flex-col items-center text-purple-300">
+                    <I n="Ghost" c="w-4 h-4 mb-1"/> 
+                    <div className="font-bold">混亂 {stats.chaos}%</div>
+                    <div className="w-full bg-slate-700 h-1 mt-1 rounded"><div className="bg-purple-500 h-1 rounded transition-all duration-500" style={{width: `${Math.min(100, stats.chaos)}%`}}></div></div>
+                </div>
+                <div className="flex flex-col items-center text-pink-300">
+                    <I n="Heart" c="w-4 h-4 mb-1"/> 
+                    <div className="font-bold">好感 {stats.love}%</div>
+                    <div className="w-full bg-slate-700 h-1 mt-1 rounded"><div className="bg-pink-500 h-1 rounded transition-all duration-500" style={{width: `${Math.min(100, stats.love)}%`}}></div></div>
+                </div>
+                <div className="flex flex-col items-center text-yellow-300">
+                    <I n="Money" c="w-4 h-4 mb-1"/> 
+                    <div className="font-bold">金錢 {stats.money}</div>
+                    <div className="w-full bg-slate-700 h-1 mt-1 rounded"><div className="bg-yellow-500 h-1 rounded transition-all duration-500" style={{width: `${Math.min(100, stats.money)}%`}}></div></div>
+                </div>
+                <div className="flex flex-col items-center text-red-400">
+                    <I n="Skull" c="w-4 h-4 mb-1"/> 
+                    <div className="font-bold">暴力 {stats.violence}%</div>
+                    <div className="w-full bg-slate-700 h-1 mt-1 rounded"><div className="bg-red-500 h-1 rounded transition-all duration-500" style={{width: `${Math.min(100, stats.violence)}%`}}></div></div>
+                </div>
+            </div>
+        );
+
+        const MiniMap = ({ activeChar, onSelect }) => (
+            <div className="absolute top-4 right-4 w-40 h-32 md:w-56 md:h-48 bg-slate-800/90 rounded-xl shadow-2xl border border-slate-600 overflow-hidden backdrop-blur-sm z-50">
+                <div className="absolute top-1 left-2 text-[10px] md:text-xs text-slate-400 font-bold flex items-center gap-1"><I n="MapIcon" c="w-3 h-3" /> 餐廳配置圖</div>
+                <div className="absolute top-0 right-0 w-1/3 h-1/3 border-l border-b border-slate-600 bg-orange-900/20 flex items-center justify-center"><span className="text-[8px] text-orange-400">廚房</span></div>
+                <div className="absolute bottom-4 left-4 w-8 h-8 md:w-12 md:h-12 border border-slate-600 rounded-full flex items-center justify-center bg-slate-700/30"><span className="text-[8px] text-slate-500">T5</span></div>
+                <div className="absolute top-1/3 left-1/3 w-10 h-10 md:w-16 md:h-16 border border-slate-600 rounded-lg flex items-center justify-center bg-slate-700/30 transform rotate-12"><span className="text-[8px] text-slate-500">T3</span></div>
+                {characters.map((char) => (
+                    <button key={char.id} onClick={(e) => { e.stopPropagation(); playClickSound(); onSelect && onSelect(char.id); }}
+                        className={`absolute w-6 h-6 md:w-8 md:h-8 rounded-full border-2 transform -translate-x-1/2 -translate-y-1/2 transition-all duration-300 flex items-center justify-center ${activeChar === char.id ? `${char.color} z-20 scale-125 shadow-white` : 'bg-slate-600 border-slate-500 opacity-80'}`}
+                        style={{ top: char.mapPos.top, left: char.mapPos.left }}>
+                        <div className="w-full h-full rounded-full overflow-hidden"><img src={char.imgFile} className="w-full h-full object-cover" onError={(e) => {e.target.style.display='none'}} /></div>
+                    </button>
+                ))}
+            </div>
+        );
+
+        const Experiment2 = ({ onBack, isMuted, toggleMute }) => {
+            const [step, setStep] = React.useState('char_select');
+            const [turn, setTurn] = React.useState(0);
+            const [stats, setStats] = React.useState({ chaos: 20, love: 50, money: 50, violence: 10 });
+            const [timer, setTimer] = React.useState(3);
+            const [currentEvent, setCurrentEvent] = React.useState(null);
+            const [myCharId, setMyCharId] = React.useState('leo');
+            const [phase, setPhase] = React.useState('reading'); 
+            const [prevChoice, setPrevChoice] = React.useState(null); // 紀錄上一次選擇類型
+            
+            const timerRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (step !== 'playing') return;
+
+                const event = getStoryNode(myCharId, turn, prevChoice);
+                if (!event) {
+                    setStep('ending');
+                    return;
+                }
+                
+                setCurrentEvent(event);
+                setPhase('reading');
+                setTimer(3);
+
+                if (timerRef.current) clearTimeout(timerRef.current);
+                timerRef.current = setTimeout(() => {
+                    setPhase('choosing');
+                    
+                    if (timerRef.current) clearTimeout(timerRef.current);
+                    timerRef.current = setInterval(() => {
+                        setTimer(prev => {
+                            if (prev <= 1) {
+                                clearInterval(timerRef.current);
+                                updateGame(event.options[0]);
+                                return 0;
+                            }
+                            return prev - 1;
+                        });
+                    }, 1000);
+
+                }, 2000);
+
+                return () => {
+                    if (timerRef.current) {
+                        clearTimeout(timerRef.current);
+                        clearInterval(timerRef.current);
+                    }
+                };
+            }, [turn, step, myCharId]);
+
+            const startGame = (charId) => {
+                playClickSound(isMuted);
+                setMyCharId(charId);
+                setStep('playing');
+                setTurn(0);
+                setPrevChoice(null);
+                
+                let initialStats = { chaos: 20, love: 50, money: 50, violence: 10 };
+                if (charId === 'gordon') initialStats.violence = 40;
+                if (charId === 'claire') initialStats.money = 90;
+                if (charId === 'leo') initialStats.love = 80;
+                setStats(initialStats);
+            };
+
+            const updateGame = (option) => {
+                playClickSound(isMuted);
+                if (timerRef.current) {
+                    clearTimeout(timerRef.current);
+                    clearInterval(timerRef.current);
+                }
+                
+                setStats(prev => ({
+                    chaos: Math.max(0, Math.min(100, prev.chaos + option.stats.chaos)),
+                    love: Math.max(0, Math.min(100, prev.love + option.stats.love)),
+                    money: Math.max(0, Math.min(100, prev.money + option.stats.money)),
+                    violence: Math.max(0, Math.min(100, prev.violence + option.stats.violence)),
+                }));
+
+                setPrevChoice(option.type); // 紀錄選擇類型以影響下一段文本
+
+                if (turn < 9) { // 增加至9回合 (0-8)
+                    setTimeout(() => {
+                        setTurn(prev => prev + 1);
+                    }, 500); 
+                } else {
+                    setStep('ending');
+                }
+            };
+
+            const endingData = step === 'ending' ? getEnding(myCharId, stats) : null;
+
+            return (
+                <div className="flex flex-col h-screen bg-slate-900 text-slate-100 font-sans relative overflow-hidden" onClick={() => toggleMute(false)}>
+                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
+                    
+                    <div className="p-4 z-10 flex justify-between items-center border-b border-purple-500/30 bg-slate-900/90 shrink-0">
+                        <div onClick={() => { playClickSound(isMuted); onBack(); }} className="cursor-pointer flex items-center gap-2 hover:text-purple-300 transition">
+                            <span className="text-purple-500 text-xl">✦</span> 
+                            <span className="font-bold">實驗計畫 II：愛的可能性</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="p-2 rounded-full hover:bg-slate-700/50 transition-colors">
+                                {isMuted ? <I n="VolumeX" c="w-5 h-5 text-slate-400" /> : <I n="Volume2" c="w-5 h-5 text-purple-400 animate-pulse" />}
+                            </button>
+                            <div className="text-xs text-purple-400 tracking-widest border border-purple-500/50 px-2 py-1 rounded uppercase">
+                                Probability Mode
+                            </div>
+                        </div>
+                    </div>
+
+                    {step === 'char_select' && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-6 z-10 animate-fade-in overflow-y-auto">
+                            <h2 className="text-3xl md:text-5xl font-serif mb-8 text-transparent bg-clip-text bg-gradient-to-r from-purple-200 to-pink-200">選擇命運載體</h2>
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 w-full max-w-4xl">
+                                {characters.map(char => (
+                                    <button key={char.id} onClick={() => startGame(char.id)}
+                                        className={`relative p-4 rounded-xl border border-slate-700 bg-slate-800/50 hover:bg-purple-900/40 hover:border-purple-500 transition-all group flex flex-col items-center gap-3`}>
+                                        <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-slate-500 group-hover:border-purple-400 shadow-lg">
+                                            <img src={char.imgFile} className="w-full h-full object-cover" onError={(e)=>e.target.style.display='none'} />
+                                        </div>
+                                        <div className="text-center">
+                                            <div className="font-bold text-lg group-hover:text-purple-300">{char.name}</div>
+                                            <div className="text-xs text-slate-400">{char.role}</div>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="mt-8 text-slate-500 text-sm">注意：不同的宿主將導向截然不同的世界線。</p>
+                        </div>
+                    )}
+
+                    {step === 'playing' && currentEvent && (
+                        <div className="flex-1 flex flex-col p-6 z-10 max-w-3xl mx-auto w-full h-full justify-between">
+                            <div className="w-full">
+                                <StatBar stats={stats} />
+                                <div className="text-center text-xs text-purple-400 uppercase tracking-widest mb-2 mt-4">
+                                    {currentEvent.situation}
+                                </div>
+                            </div>
+                            
+                            <div className="flex-1 flex flex-col items-center justify-center mb-4">
+                                <div className={`transition-all duration-700 ${phase === 'reading' ? 'opacity-100 scale-100' : 'opacity-80 scale-95'}`}>
+                                    <p className="text-xl md:text-3xl font-serif leading-relaxed text-center text-white drop-shadow-md">
+                                        {currentEvent.text}
+                                    </p>
+                                </div>
+                                
+                                {phase === 'reading' && (
+                                    <div className="mt-8 text-purple-400 text-sm animate-pulse flex items-center gap-2">
+                                        <I n="Eye" c="w-4 h-4"/> 正在觀察局勢...
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className={`w-full transition-all duration-500 ${phase === 'reading' ? 'opacity-50 grayscale pointer-events-none' : 'opacity-100 grayscale-0'}`}>
+                                {phase === 'choosing' && (
+                                    <div className="w-full h-2 bg-slate-800 rounded-full mb-6 overflow-hidden relative">
+                                        <div key={turn} className="absolute top-0 left-0 h-full bg-gradient-to-r from-purple-500 to-pink-500 animate-progress" style={{width: '100%'}}></div>
+                                    </div>
+                                )}
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    {currentEvent.options.map((opt, i) => (
+                                        <button key={i} onClick={() => updateGame(opt)}
+                                            disabled={phase === 'reading'}
+                                            className={`p-6 rounded-xl border-2 text-left transition-all transform hover:scale-105 active:scale-95 flex flex-col justify-between h-32
+                                                ${opt.type === 'normal' ? 'border-blue-500/30 bg-blue-500/10 hover:border-blue-400' : ''}
+                                                ${opt.type === 'rebel' ? 'border-red-500/30 bg-red-500/10 hover:border-red-400' : ''}
+                                                ${opt.type === 'fantasy' ? 'border-purple-500/30 bg-purple-500/10 hover:border-purple-400' : ''}
+                                            `}>
+                                            <div>
+                                                <div className={`text-xs uppercase font-bold tracking-wider mb-2 
+                                                    ${opt.type === 'normal' ? 'text-blue-300' : ''}
+                                                    ${opt.type === 'rebel' ? 'text-red-300' : ''}
+                                                    ${opt.type === 'fantasy' ? 'text-purple-300' : ''}
+                                                `}>
+                                                    {opt.type === 'normal' ? '誠實/贖罪' : opt.type === 'rebel' ? '叛逆' : '玄幻'}
+                                                </div>
+                                                <div className="font-bold text-lg">{opt.label}</div>
+                                            </div>
+                                            <div className="text-xs opacity-70">{opt.desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {step === 'ending' && endingData && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-8 z-10 animate-fade-in text-center overflow-y-auto">
+                            <div className="text-purple-400 tracking-[0.5em] text-sm md:text-base mb-4 uppercase">Timeline Collapsed</div>
+                            <h2 className="text-4xl md:text-6xl font-serif font-bold text-transparent bg-clip-text bg-gradient-to-b from-white to-purple-400 mb-2 glitch-text" data-text={`【${endingData.title}】`}>
+                                【{endingData.title}】
+                            </h2>
+                            <h3 className="text-2xl md:text-4xl font-bold text-white mb-4">結局：{endingData.name}</h3>
+                            <p className="text-slate-300 max-w-lg mx-auto mb-8 text-lg font-serif">"{endingData.desc}"</p>
+                            
+                            <StatBar stats={stats} />
+                            
+                            <div className="mt-12">
+                                <button onClick={() => { playClickSound(isMuted); setStep('char_select'); }} className="px-8 py-4 bg-white text-slate-900 rounded-full font-bold hover:bg-purple-100 hover:scale-105 transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] flex items-center gap-2">
+                                    <I n="Repeat" c="w-5 h-5"/> 觀測其他世界線
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const Experiment1 = ({ onBack, isMuted, toggleMute }) => {
+            const [currentTime, setCurrentTime] = React.useState(0);
+            const [isPlaying, setIsPlaying] = React.useState(false);
+            const [activeChar, setActiveChar] = React.useState('leo');
+            const timerRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (isPlaying) {
+                    timerRef.current = setInterval(() => setCurrentTime(prev => prev >= 300 ? prev : prev + 1), 1000);
+                } else { clearInterval(timerRef.current); }
+                return () => clearInterval(timerRef.current);
+            }, [isPlaying]);
+
+            const currentContent = getContentAtTime(currentTime, activeChar, timelineExp1);
+            const activeCharData = characters.find(c => c.id === activeChar);
+            const ambientAudio = getAmbientAudio(currentTime, activeChar, timelineExp1);
+
+            return (
+                <div className="flex flex-col h-screen bg-slate-50 font-sans text-slate-800" onClick={() => toggleMute(false)}>
+                    <header className="bg-slate-900 text-white p-4 shadow-lg flex justify-between items-center z-10 shrink-0">
+                        <div className="font-bold text-lg flex items-center gap-2 cursor-pointer hover:text-pink-300 transition-colors" onClick={() => { playClickSound(isMuted); onBack(); }}>
+                            <span className="text-yellow-500">❚</span> 實驗計畫 I：愛的修羅場 <span className="text-xs opacity-50 ml-2">(點此返回)</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="p-2 rounded-full hover:bg-slate-700/50 transition-colors">
+                                {isMuted ? <I n="VolumeX" c="w-5 h-5 text-slate-400" /> : <I n="Volume2" c="w-5 h-5 text-blue-400 animate-pulse" />}
+                            </button>
+                            <div className="text-xl font-mono font-bold flex items-center gap-2">
+                                {Math.floor(currentTime/60).toString().padStart(2,'0')}:{Math.floor(currentTime%60).toString().padStart(2,'0')}
+                                <I n="Clock" c="w-6 h-6 text-red-400 animate-pulse" />
+                            </div>
+                        </div>
+                    </header>
+                    <main className="flex-1 overflow-hidden relative flex flex-col md:flex-row">
+                        <div className={`flex-1 p-4 md:p-8 flex flex-col items-center transition-colors duration-500 ${activeCharData.color} bg-opacity-20 overflow-y-auto relative`}>
+                            <MiniMap activeChar={activeChar} onSelect={(id) => { playClickSound(isMuted); setActiveChar(id); }} />
+                            <div className="max-w-3xl w-full py-4 flex flex-col gap-6 mt-8 md:mt-0">
+                                <div className="flex items-center gap-4">
+                                    <div className={`w-16 h-16 rounded-full ${activeCharData.color} shadow-lg ring-4 ring-white overflow-hidden flex items-center justify-center`}>
+                                        <img src={activeCharData.imgFile} className="w-full h-full object-cover" onError={(e)=>e.target.style.display='none'} />
+                                    </div>
+                                    <div>
+                                        <div className="uppercase text-xs font-bold text-slate-400 mb-1">Perspective</div>
+                                        <h2 className="text-2xl font-bold">{activeCharData.name}</h2>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2 mb-1 text-slate-400"><I n="Ear" c="w-4 h-4"/> <span className="text-xs font-bold">EARS</span></div>
+                                    <div className="bg-slate-800/5 rounded-xl p-4 min-h-[60px] flex flex-col gap-2 border border-slate-200">
+                                        {ambientAudio.length > 0 ? ambientAudio.map(a => <div key={a.id} className="flex gap-2 items-start"><span className="text-xs font-bold px-1.5 py-0.5 rounded bg-white border">{a.name}</span><span className="text-sm font-medium pt-0.5">"{a.text}"</span></div>) : <span className="text-slate-400 text-sm italic">...</span>}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-2 mb-1 text-slate-400"><div className="w-4 h-4 rounded-full border-2 border-current flex items-center justify-center"><div className="w-1.5 h-1.5 bg-current rounded-full"></div></div><span className="text-xs font-bold">EYES</span></div>
+                                    <div className="p-5 bg-white/80 rounded-lg shadow-sm border-l-4 border-slate-500"><p className="text-base italic text-slate-700 serif">"{currentContent.visual}"</p></div>
+                                </div>
+                                <div className={`p-6 rounded-xl shadow-xl bg-white ${currentContent.type === 'thought' ? 'border-dashed border-2 border-slate-400' : 'border-solid border-l-8 border-slate-800'}`}>
+                                    <span className={`text-xs font-bold block mb-3 uppercase flex items-center gap-2 ${currentContent.type === 'thought' ? 'text-blue-600' : 'text-red-600'}`}>{currentContent.type === 'thought' ? <span><I n="Zap" c="inline w-4 h-4 mr-1"/> MIND</span> : <span><I n="MessageCircle" c="inline w-4 h-4 mr-1"/> MOUTH</span>}</span>
+                                    <p className="text-xl font-bold text-slate-900">{currentContent.text}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="bg-white border-t md:border-t-0 md:border-l border-slate-200 p-2 md:p-4 md:w-72 flex md:flex-col gap-2 overflow-x-auto shrink-0 safe-area-bottom">
+                            {characters.map(char => (
+                                <button key={char.id} onClick={() => { playClickSound(isMuted); setActiveChar(char.id); }} className={`flex items-center gap-3 p-3 rounded-xl min-w-[80px] md:w-full transition-all ${activeChar === char.id ? `${char.color} ring-2 ring-slate-800 scale-105 shadow-md` : 'hover:bg-slate-50 opacity-70 grayscale'}`}>
+                                    <div className="w-10 h-10 rounded-full bg-white shadow-sm overflow-hidden flex-shrink-0"><img src={char.imgFile} className="w-full h-full object-cover" onError={(e)=>e.target.style.display='none'} /></div>
+                                    <div className="hidden md:block text-left"><div className="font-bold text-sm">{char.name}</div><div className="text-xs text-slate-500">{char.role}</div></div>
+                                </button>
+                            ))}
+                        </div>
+                    </main>
+                    <footer className="bg-white border-t border-slate-200 p-3 pb-6 shrink-0">
+                        <div className="max-w-4xl mx-auto space-y-3">
+                            <input type="range" min="0" max="300" value={currentTime} onChange={(e) => { setCurrentTime(parseInt(e.target.value)); setIsPlaying(false); }} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900" />
+                            <div className="flex justify-center items-center gap-4">
+                                <button onClick={() => { playClickSound(isMuted); setCurrentTime(Math.max(0, currentTime - 5)); setIsPlaying(false); }}><I n="SkipBack" c="w-6 h-6 text-slate-400" /></button>
+                                <button onClick={() => { playClickSound(isMuted); setIsPlaying(!isPlaying); }} className="w-14 h-14 bg-slate-900 text-white rounded-full flex items-center justify-center shadow-xl">{isPlaying ? <I n="Pause" c="w-6 h-6" /> : <I n="Play" c="w-6 h-6 ml-1" />}</button>
+                                <button onClick={() => { playClickSound(isMuted); setCurrentTime(Math.min(300, currentTime + 5)); setIsPlaying(false); }}><I n="SkipForward" c="w-6 h-6 text-slate-400" /></button>
+                            </div>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const CoverPage = ({ onStartExp1, onStartExp2, isMuted, toggleMute }) => (
+            <div className="flex flex-col items-center justify-center h-screen bg-slate-900 text-white p-8 text-center relative overflow-hidden" onClick={() => toggleMute(false)}>
+                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-600/20 blur-3xl animate-pulse"></div>
+                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-purple-600/20 blur-3xl animate-pulse delay-700"></div>
+                
+                <div className="absolute top-4 right-4 z-20">
+                    <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="p-2 rounded-full hover:bg-slate-700/50 transition-colors">
+                        {isMuted ? <I n="VolumeX" c="w-8 h-8 text-slate-400" /> : <I n="Volume2" c="w-8 h-8 text-pink-400 animate-pulse" />}
+                    </button>
+                </div>
+
+                <div className="z-10 max-w-4xl w-full flex flex-col items-center gap-12">
+                    <h1 className="text-5xl md:text-7xl font-serif font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-white to-pink-200 drop-shadow-lg">愛的86400</h1>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-3xl">
+                        <div className="group relative p-1 rounded-2xl bg-gradient-to-b from-pink-500/20 to-transparent hover:from-pink-500/50 transition-all duration-500">
+                            <div className="bg-slate-800/80 backdrop-blur h-full rounded-xl p-8 flex flex-col items-center gap-6">
+                                <div className="h-16 w-16 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-300"><I n="Heart" c="w-8 h-8"/></div>
+                                <div><h3 className="text-xl font-bold mb-2 text-pink-100">實驗計畫 I：愛的修羅場</h3><p className="text-sm text-slate-400">全視角觀測模式。</p></div>
+                                <button onClick={(e) => { e.stopPropagation(); playClickSound(isMuted); onStartExp1(); }} className="mt-auto px-8 py-3 rounded-full border border-pink-500/50 text-pink-300 hover:bg-pink-500 hover:text-white transition-all w-full font-bold tracking-widest flex items-center justify-center gap-2">LOVING <I n="Play" c="w-4 h-4"/></button>
+                            </div>
+                        </div>
+
+                        <div className="group relative p-1 rounded-2xl bg-gradient-to-b from-purple-500/20 to-transparent hover:from-purple-500/50 transition-all duration-500">
+                            <div className="bg-slate-800/80 backdrop-blur h-full rounded-xl p-8 flex flex-col items-center gap-6">
+                                <div className="h-16 w-16 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-300"><I n="Dice" c="w-8 h-8"/></div>
+                                <div><h3 className="text-xl font-bold mb-2 text-purple-100">實驗計畫 II：愛的可能性</h3><p className="text-sm text-slate-400">RPG 抉擇模式。3 秒倒數，數值驅動結局。</p></div>
+                                <button onClick={(e) => { e.stopPropagation(); playClickSound(isMuted); onStartExp2(); }} className="mt-auto px-8 py-3 rounded-full border border-purple-500/50 text-purple-300 hover:bg-purple-500 hover:text-white transition-all w-full font-bold tracking-widest flex items-center justify-center gap-2">PROBABILITY <I n="Zap" c="w-4 h-4"/></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const App = () => {
+            const [mode, setMode] = React.useState('cover');
+            const [isMuted, setIsMuted] = React.useState(true); // Lifted state for mute status
+
+            const toggleMute = (forceState) => {
+                initAudio(); // Ensure audio context is created
+                
+                // Resume context if suspended (needed for Chrome)
+                if (audioContext.ctx && audioContext.ctx.state === 'suspended') {
+                    audioContext.ctx.resume();
+                }
+
+                const newState = forceState !== undefined ? forceState : !isMuted;
+                setIsMuted(newState);
+
+                if (audioContext.bgm) {
+                    if (!newState) {
+                        audioContext.bgm.play().catch(e => console.log("Autoplay prevented", e));
+                    } else {
+                        audioContext.bgm.pause();
+                    }
+                }
+            };
+
+            if (mode === 'exp1') return <Experiment1 onBack={() => setMode('cover')} isMuted={isMuted} toggleMute={toggleMute} />;
+            if (mode === 'exp2') return <Experiment2 onBack={() => setMode('cover')} isMuted={isMuted} toggleMute={toggleMute} />;
+            
+            return <CoverPage onStartExp1={() => setMode('exp1')} onStartExp2={() => setMode('exp2')} isMuted={isMuted} toggleMute={toggleMute} />;
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
